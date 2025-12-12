@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en" class="bg-gray-900 text-white">
+<head>
+  <meta charset="UTF-8" />
+  <title>YouTube Auto Upload</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
+</head>
+
+<body class="p-6">
+
+  <h1 class="text-3xl font-bold mb-4">🎬 Automated YouTube Publisher</h1>
+
+  <!-- IMAGE UPLOAD -->
+  <div class="mb-6">
+    <label class="block mb-2">Upload Overlay Image</label>
+    <input id="overlayInput" type="file" accept="image/*" class="text-white" />
+    <button id="btnUploadOverlay" type="button" class="bg-blue-600 px-4 py-2 rounded mt-2">
+      Upload Overlay
+    </button>
+    <p id="overlayStatus" class="mt-2 text-sm opacity-80"></p>
+  </div>
+
+  <!-- MUSIC -->
+  <div class="mb-6">
+    <label class="block mb-2">Select Music</label>
+    <select id="musicSelect" class="text-black p-2 rounded w-64">
+      <option value="">Choose</option>
+      <option value="./music/track1.mp3">chrismas 1</option>
+      <option value="./music/track2.mp3">chrismas dg 2</option>
+       <option value="./music/bass.mp3">bass</option>
+      <option value="./music/blue.mp3">blue</option>
+      <option value="./music/cat.mp3">cat</option>
+      <option value="./music/confess.mp3">confess</option>
+       <option value="./music/getout.mp3">getout</option>
+      <option value="./music/india.mp3">india</option>
+       <option value="./music/kpoi.mp3">kpoi</option>
+      <option value="./music/line.mp3">line</option>
+       <option value="./music/m8.mp3">m8</option>
+       <option value="./music/onga.mp3">onga</option>
+       <option value="./music/steps.mp3">steps</option>
+    </select>
+  </div>
+
+  <!-- PREVIEW BUTTON -->
+  <button id="btnGeneratePreview" type="button" class="bg-yellow-600 px-4 py-2 rounded mb-6">
+    Generate Preview
+  </button>
+
+  <!-- VIDEO PREVIEW -->
+  <video id="previewPlayer" class="w-96 border mb-6 h-40" controls></video>
+  <p id="previewStatus" class="mb-4 text-sm opacity-80"></p>
+
+  <!-- METADATA -->
+  <div class="grid grid-cols-1 gap-4 mb-6">
+    <input id="titleInput" class="p-2 text-black" placeholder="Video Title" />
+    <textarea id="descInput" class="p-2 text-black" placeholder="Description"></textarea>
+    <input id="tagsInput" class="p-2 text-black" placeholder="Tags (comma separated)" />
+
+    <select id="privacySelect" class="text-black p-2">
+      <option value="public">Public</option>
+      <option value="unlisted">Unlisted</option>
+      <option value="private">Private</option>
+    </select>
+
+    <select id="kidsSelect" class="text-black p-2">
+      <option value="false">Not for Kids</option>
+      <option value="true">Made for Kids</option>
+    </select>
+  </div>
+
+  <!-- UPLOAD BUTTON -->
+  <button id="btnUploadYoutube" type="button" class="bg-green-600 px-4 py-2 rounded" disabled>
+    Upload to YouTube
+  </button>
+
+  <!-- PROGRESS UI -->
+  <div class="mt-6 w-full bg-gray-700 rounded">
+    <div id="progressBar" class="bg-green-500 h-3 rounded" style="width:0%"></div>
+  </div>
+  <p id="progressText" class="mt-2 text-sm opacity-80"></p>
+
+<script>
+/* ---------- CONFIG ---------- */
+const API = "http://localhost:3000";
+const SUPABASE_URL = "https://zsoqsgebuecetpjjybcl.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpzb3FzZ2VidWVjZXRwamp5YmNsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUxMzQxNTgsImV4cCI6MjA4MDcxMDE1OH0.WcNhMC22xXS6kpyrGI1i2ZX9QFMp5AffGSSWvGsfC-A";
+
+/* ---------- INIT ---------- */
+console.log("🚀 Frontend loaded and ready.");
+
+const supa = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+/* ---------- ELEMENTS ---------- */
+const overlayInput = document.getElementById("overlayInput");
+const btnUploadOverlay = document.getElementById("btnUploadOverlay");
+const overlayStatus = document.getElementById("overlayStatus");
+
+const musicSelect = document.getElementById("musicSelect");
+const btnGeneratePreview = document.getElementById("btnGeneratePreview");
+const previewPlayer = document.getElementById("previewPlayer");
+const previewStatus = document.getElementById("previewStatus");
+
+const btnUploadYoutube = document.getElementById("btnUploadYoutube");
+const progressBar = document.getElementById("progressBar");
+const progressText = document.getElementById("progressText");
+
+const titleInput = document.getElementById("titleInput");
+const descInput = document.getElementById("descInput");
+const tagsInput = document.getElementById("tagsInput");
+const privacySelect = document.getElementById("privacySelect");
+const kidsSelect = document.getElementById("kidsSelect");
+
+/* ---------- STATE ---------- */
+let overlayJobId = null;      // job row id created for overlay
+let overlayFilename = null;   // actual saved filename (overlay.jpg)
+let previewJobId = null;      // job id for the preview render (if backend returns it)
+let lastPolledTimer = null;
+
+/* ---------- HELPERS ---------- */
+function safeJsonParse(text) {
+  try { return JSON.parse(text); } catch (e) { return null; }
+}
+
+function fullUrlFor(tmpPath) {
+  // if path already absolute, return as-is
+  if (!tmpPath) return null;
+  if (tmpPath.startsWith("http://") || tmpPath.startsWith("https://")) return tmpPath;
+  // backend serves /tmp via static route; ensure API origin present
+  if (tmpPath.startsWith("/")) return API + tmpPath;
+  return API + "/" + tmpPath.replace(/^\/+/,'');
+}
+
+function setProgress(p, message = "") {
+  progressBar.style.width = (p || 0) + "%";
+  progressText.innerText = `${(message || "").substring(0,200)}`;
+}
+
+/* ---------- POLLING ---------- */
+async function pollJob(jobId) {
+  if (!jobId) {
+    console.warn("⏳ pollJob called with empty jobId");
+    return;
+  }
+  console.log("⏳ Polling job:", jobId);
+
+  // clear previous timer
+  if (lastPolledTimer) clearInterval(lastPolledTimer);
+
+  lastPolledTimer = setInterval(async () => {
+    try {
+      const { data, error } = await supa
+        .from("job_states")
+        .select("*")
+        .eq("id", jobId)
+        .single();
+
+      if (error) {
+        // 400/406 etc — show a simple console note and continue (policy/setup issues will show here)
+        console.warn("polled supabase error:", error);
+        return;
+      }
+      if (!data) return;
+
+      // update progress UI
+      setProgress(data.progress || 0, `${(data.state || "").toUpperCase()} — ${data.message || ""}`);
+      console.log("🔁 job-state:", data);
+
+      // if job has result_url or preview url, set it to video
+      const urlFromJob = data.result_url || data.preview_url || data.previewUrl || null;
+      if (data.state === "done" || urlFromJob) {
+        clearInterval(lastPolledTimer);
+        lastPolledTimer = null;
+
+        const publicUrl = fullUrlFor(urlFromJob);
+        if (publicUrl) {
+          console.log("🎉 Preview ready (from job):", publicUrl);
+          previewPlayer.src = publicUrl;
+          previewStatus.innerText = "Preview ready — playing.";
+          btnUploadYoutube.disabled = false;
+          previewJobId = jobId;
+        } else {
+          // sometimes backend sets done but doesn't provide URL; just enable upload
+          console.log("✅ Job done, no URL in row — enabling upload");
+          btnUploadYoutube.disabled = false;
+          previewStatus.innerText = "Preview finished (no URL provided).";
+          previewJobId = jobId;
+        }
+      } else if (data.state === "error") {
+        clearInterval(lastPolledTimer);
+        lastPolledTimer = null;
+        previewStatus.innerText = "❌ Render error: " + (data.message || "unknown");
+        console.error("Job error:", data);
+      }
+    } catch (err) {
+      console.error("pollJob exception:", err);
+    }
+  }, 1500);
+}
+
+/* ---------- UPLOAD OVERLAY ---------- */
+btnUploadOverlay.addEventListener("click", async (ev) => {
+  ev.preventDefault();
+  overlayStatus.innerText = "";
+  if (!overlayInput.files || overlayInput.files.length === 0) {
+    alert("Please choose an overlay image first.");
+    return;
+  }
+
+  const file = overlayInput.files[0];
+  const form = new FormData();
+  form.append("overlay", file);
+
+  btnUploadOverlay.disabled = true;
+  btnUploadOverlay.innerText = "Uploading…";
+  console.log("🖼️ Upload overlay started");
+
+  try {
+    const res = await fetch(`${API}/api/upload-overlay`, { method: "POST", body: form });
+    const text = await res.text();
+    const json = safeJsonParse(text);
+
+    console.log("🔵 Overlay reply:", json, "raw:", text);
+
+    if (!json || !json.jobId) {
+      overlayStatus.innerText = "Upload failed: invalid server response";
+      console.error("Invalid upload response:", text);
+      btnUploadOverlay.disabled = false;
+      btnUploadOverlay.innerText = "Upload Overlay";
+      return;
+    }
+
+    overlayJobId = json.jobId;
+    overlayFilename = json.filename || null;
+
+    overlayStatus.innerText = `Uploaded. Overlay job: ${overlayJobId}`;
+    console.log("✅ Overlay stored:", { overlayJobId, overlayFilename });
+
+    // if backend set job row, poll it just to reflect any status
+    pollJob(overlayJobId);
+
+  } catch (err) {
+    console.error("❌ overlay upload error", err);
+    overlayStatus.innerText = "Upload failed (see console)";
+  } finally {
+    btnUploadOverlay.disabled = false;
+    btnUploadOverlay.innerText = "Upload Overlay";
+  }
+});
+
+/* ---------- GENERATE PREVIEW ---------- */
+btnGeneratePreview.addEventListener("click", async (ev) => {
+  ev.preventDefault();
+
+  previewStatus.innerText = "";
+  if (!overlayJobId || !overlayFilename) {
+    alert("Upload overlay first — overlay must be uploaded and saved.");
+    return;
+  }
+
+  // prepare payload as your backend expects
+  const payload = {
+    jobId: overlayJobId,
+    overlayFilename: overlayFilename,
+    musicPath: musicSelect.value || null,
+    scale: Number(2000) || 2000,
+    x: Number(80) || 80,
+    y: Number(900) || 900
+  };
+
+  console.log("🎞️ Generate preview clicked, payload:", payload);
+
+  btnGeneratePreview.disabled = true;
+  btnGeneratePreview.innerText = "Generating…";
+
+  try {
+    const res = await fetch(`${API}/api/generate-preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    const text = await res.text();
+    const json = safeJsonParse(text);
+    console.log("🔵 Raw preview reply:", json || text);
+
+    // If backend returned previewUrl immediately, use it
+    if (json && (json.previewUrl || json.preview_url || json.result_url)) {
+      const url = fullUrlFor(json.previewUrl || json.preview_url || json.result_url);
+      if (url) {
+        previewPlayer.src = url;
+        previewStatus.innerText = "Preview ready — playing.";
+        btnUploadYoutube.disabled = false;
+      }
+    }
+
+    // If backend returned a jobId to poll, poll it
+    if (json && json.jobId) {
+      previewJobId = json.jobId;
+      pollJob(json.jobId);
+    }
+
+    // fallback: if nothing returned but preview created on server, try building URL from known pattern
+    if ((!json || (!json.previewUrl && !json.jobId && !json.result_url)) && overlayJobId) {
+      // assume preview saved as /tmp/<overlayJobId>/preview-<timestamp>.mp4 — can't know exact name.
+      // Try to fetch job row after short delay in case server updates it.
+      setTimeout(() => pollJob(overlayJobId), 1500);
+      previewStatus.innerText = "Preview requested — waiting for server.";
+    }
+
+  } catch (err) {
+    console.error("❌ Preview generation failed:", err);
+    previewStatus.innerText = "Preview error (see console)";
+  } finally {
+    btnGeneratePreview.disabled = false;
+    btnGeneratePreview.innerText = "Generate Preview";
+  }
+});
+
+/* ---------- UPLOAD TO YOUTUBE ---------- */
+btnUploadYoutube.addEventListener("click", async (ev) => {
+  ev.preventDefault();
+
+  btnUploadYoutube.disabled = true;
+  btnUploadYoutube.innerText = "Uploading…";
+  setProgress(5, "Starting upload…");
+
+  const payload = {
+    jobId: overlayJobId,
+    title: titleInput.value || "Auto video",
+    description: descInput.value || "",
+    tags: (tagsInput.value || "").split(",").map(t => t.trim()).filter(Boolean),
+    privacyStatus: privacySelect.value || "public",
+    selfDeclaredMadeForKids: kidsSelect.value === "true"
+  };
+
+  console.log("📤 Uploading to YouTube with payload:", payload);
+
+  try {
+    const res = await fetch(`${API}/api/upload-youtube`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    const text = await res.text();
+    const json = safeJsonParse(text);
+    console.log("🔵 Raw YouTube upload reply:", json || text);
+
+    if (json && json.jobId) {
+      pollJob(json.jobId);
+    } else {
+      // fallback: server may return result_url immediately
+      if (json && json.result_url) {
+        alert("Uploaded: " + json.result_url);
+      } else {
+        alert("Upload request sent. Check server logs for progress.");
+      }
+    }
+  } catch (err) {
+    console.error("❌ YouTube upload failed:", err);
+    alert("YouTube upload failed (see console).");
+  } finally {
+    btnUploadYoutube.disabled = false;
+    btnUploadYoutube.innerText = "Upload to YouTube";
+  }
+});
+</script>
+
+</body>
+</html>
